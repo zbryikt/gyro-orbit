@@ -63,7 +63,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 <script>
 (() => {
   // 每組 = 一支影片 ( H3 FLF, 首尾同圖 ) 抽出的幀, 構成一圈 360°. 最後一幀之後接回第 1 幀.
-  // ?set=anime / ?set=photo 切換
+  // ?set=v2a / ?set=v2b 切換
   const SETS = { v2a: { n: 95, label: 'A' }, v2b: { n: 99, label: 'B' } };
   const setName = SETS[new URLSearchParams(location.search).get('set')] ? new URLSearchParams(location.search).get('set') : 'v2a';
   const N = SETS[setName].n, SRC = i => `sets/${setName}/${String(i + 1).padStart(3, '0')}.jpg`;
@@ -73,6 +73,20 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   const $ = id => document.getElementById(id);
   const frames = [];
   let loaded = 0;
+
+  // 每幀的實際角度 ( scripts/analyze_angles.py 用光流估計 ). 影片不是等速轉, 依角度反查才會等比例.
+  // 沒有 angles.json 的組就當等速.
+  let angles = null;
+  fetch(`sets/${setName}/angles.json`).then(r => r.ok ? r.json() : null).then(a => { if (a && a.length === N) angles = a; }).catch(() => {});
+  // 進度 p ( 0~1 圈 ) -> 小數幀位置 f ( 0~N, N 等於回到第 0 幀 )
+  function frameAt(p) {
+    if (!angles) return p * N;
+    const A = p * 360;
+    let lo = 0, hi = N - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (angles[m] <= A) lo = m; else hi = m - 1; }
+    const a0 = angles[lo], a1 = lo + 1 < N ? angles[lo + 1] : 360;
+    return lo + (a1 > a0 ? (A - a0) / (a1 - a0) : 0);
+  }
 
   // 狀態: target = 感測器給的進度 ( 圈數, 可超過 1 ), cur = 平滑後實際顯示的進度
   let mode = 'gyro', perTurn = 120, target = 0, cur = 0;
@@ -107,7 +121,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
     if (mode === 'gyro') target = yaw / perTurn;
     else target = tiltBase == null ? yaw / perTurn : (tilt - tiltBase) / perTurn;
     cur += (target - cur) * 0.25;
-    const p = ((cur % 1) + 1) % 1, f = p * N;
+    const p = ((cur % 1) + 1) % 1, f = frameAt(p);
     const a = Math.floor(f) % N, b = (a + 1) % N, t = f - Math.floor(f);
     if (loaded === N) {
       // 相鄰兩幀交叉淡入, 補足 35 幀之間的跳動

@@ -9,6 +9,7 @@ Demo: https://zbryikt.github.io/gyro-orbit/
 1. 用 OpenAI `gpt-image-2` 生成一張場景圖 ( 中間有主體 )。
 2. 用 fal 上的 MiniMax H3 ( `minimax/h3-max-turbo/image-to-video` ) 做首尾幀 ( FLF ) 生成: 首幀與尾幀都是同一張圖, prompt 要求時間凍結、鏡頭等速環繞一圈。prompt 見 `scripts/prompt-orbit-v2.txt`。
 3. 影片抽成逐幀 JPEG ( 去掉結尾回到原圖後的靜止段 ), 網頁用 canvas 依角度畫出對應幀, 相鄰幀交叉淡入。
+4. 生成的影片不是等速轉 ( 頭尾明顯 ease-in / ease-out )。`scripts/analyze_angles.py` 用 DIS 光流量測相鄰幀背景 ( 排除中央主體 ) 的水平位移, 累加後正規化成 360°, 存成每組的 `angles.json`; 網頁依手機角度反查對應的幀, 轉動就變成等比例。
 
 ## 網頁操作
 
@@ -24,4 +25,5 @@ Demo: https://zbryikt.github.io/gyro-orbit/
     python3 scripts/gen_image.py "<prompt>" out.png gpt-image-2
     python3 scripts/gen_video.py in.jpg out.mp4 4 1080P "$(cat scripts/prompt-orbit-v2.txt)"
     ffmpeg -i out.mp4 -frames:v <N> -vf scale=720:-2 -q:v 4 web/sets/<name>/%03d.jpg
+    python3 scripts/analyze_angles.py web/sets/<name> > web/sets/<name>/angles.json   # 需要 opencv-python-headless
     python3 scripts/serve.py 8790 web
