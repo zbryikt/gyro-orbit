@@ -1,0 +1,14 @@
+Japanese anime style, clean line art, consistent character design, the couple's faces always clearly drawn.
+
+Bullet-time freeze frame: time is completely frozen. The couple and everything in the scene stay perfectly still like statues. Only the camera moves.
+
+The camera performs exactly one complete 360-degree orbit around the couple, in a single continuous shot with no cuts. It travels on a perfect circle at a constant distance and constant height, always pointed at the couple and keeping them centered in frame. It rotates at a perfectly constant angular speed: 90 degrees per second, the same amount between every pair of frames. It always moves in the same direction (counterclockwise seen from above), never pauses, never slows down, never reverses, never jumps.
+
+Timeline:
+- 0.0 s: front view, the starting image.
+- 1.0 s: the camera has moved 90 degrees to the couple's left side; we see the girl in clear side profile.
+- 2.0 s: the camera is directly behind the couple; we see their backs and the street that was behind the original camera.
+- 3.0 s: the camera has continued to the couple's right side; we see the boy in clear side profile.
+- 4.0 s: the camera arrives back at the front, exactly where it started. The last frame is identical to the first frame.
+
+The camera must pass through the back view and the other side; it never turns back or cuts directly to the front.
