@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Gyro Orbit</title>
+<style>
+:root {
+  --bg: #0b0b0c;
+  --fg: #f4f1ea;
+  --muted: rgba(244,241,234,.6);
+  --panel: rgba(16,16,18,.55);
+  --accent: #f2b45a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden;
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang TC", sans-serif;
+  -webkit-user-select: none; user-select: none; touch-action: none; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#hud { position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 10px; align-items: center; pointer-events: none; }
+#hud > * { pointer-events: auto; }
+#dial { width: 56px; height: 56px; }
+#bar { display: flex; gap: 8px; padding: 6px; border-radius: 999px; background: var(--panel);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+#bar button { border: 0; border-radius: 999px; padding: 8px 14px; font: inherit; color: var(--muted); background: transparent; }
+#bar button.on { color: #111; background: var(--fg); }
+#sens { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+#sens input { width: 140px; accent-color: var(--accent); }
+#start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: rgba(0,0,0,.45); text-align: center; padding: 16px; }
+#start button { border: 0; border-radius: 999px; padding: 14px 28px; font: 600 16px/1 inherit; font-family: inherit;
+  color: #111; background: var(--fg); }
+#start p { margin: 0; color: var(--muted); max-width: 300px; }
+#msg { position: fixed; top: calc(12px + env(safe-area-inset-top)); left: 16px; right: 16px; text-align: center;
+  color: var(--muted); font-size: 12px; }
+#sets { display: flex; gap: 8px; }
+#sets a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(244,241,234,.3); }
+#sets a.on { color: #111; background: var(--fg); border-color: var(--fg); }
+.hide { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="msg">載入中…</div>
+<div id="hud" class="hide">
+  <svg id="dial" viewBox="0 0 56 56" aria-hidden="true">
+    <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(244,241,234,.2)" stroke-width="3"/>
+    <circle id="dot" cx="28" cy="6" r="5" fill="var(--accent)"/>
+  </svg>
+  <div id="sens"><span>靈敏度</span><input id="sensIn" type="range" min="60" max="360" step="10" value="120"><span id="sensOut">120°/圈</span></div>
+  <div id="bar">
+    <button data-mode="gyro" class="on">轉動</button>
+    <button data-mode="tilt">傾斜</button>
+    <button id="recenter">歸位</button>
+  </div>
+</div>
+<div id="start">
+  <button id="go">開始</button>
+  <p>手機左右轉動或傾斜來環繞主體。<br>電腦上可用滑鼠拖曳。</p>
+  <div id="sets"></div>
+</div>
+<script>
+(() => {
+  // 每組 = 一支影片 ( H3 FLF, 首尾同圖 ) 抽出的幀, 構成一圈 360°. 最後一幀之後接回第 1 幀.
+  // ?set=anime / ?set=photo 切換
+  const SETS = { v2a: { n: 95, label: 'A' }, v2b: { n: 99, label: 'B' } };
+  const setName = SETS[new URLSearchParams(location.search).get('set')] ? new URLSearchParams(location.search).get('set') : 'v2a';
+  const N = SETS[setName].n, SRC = i => `sets/${setName}/${String(i + 1).padStart(3, '0')}.jpg`;
+  document.getElementById('sets').innerHTML = Object.entries(SETS)
+    .map(([k, v]) => `<a href="?set=${k}" class="${k === setName ? 'on' : ''}">${v.label}</a>`).join('');
+  const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const frames = [];
+  let loaded = 0;
+
+  // 狀態: target = 感測器給的進度 ( 圈數, 可超過 1 ), cur = 平滑後實際顯示的進度
+  let mode = 'gyro', perTurn = 120, target = 0, cur = 0;
+  let yaw = 0;               // gyro 模式: 累積的旋轉角 ( 度 )
+  let tiltBase = null, tilt = 0; // tilt 模式: 以開始時的傾斜為原點
+
+  for (let i = 0; i < N; i++) {
+    const im = new Image();
+    im.onload = () => { if (++loaded === N) { $('msg').classList.add('hide'); resize(); } else $('msg').textContent = `載入中 ${loaded}/${N}`; };
+    // 失敗就稍後重試 ( 加參數避開快取的失敗結果 )
+    let tries = 0;
+    im.onerror = () => { if (++tries < 8) setTimeout(() => { im.src = SRC(i) + '?r=' + tries; }, 300 * tries); };
+    im.src = SRC(i);
+    frames.push(im);
+  }
+
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  }
+  addEventListener('resize', resize);
+
+  function drawCover(im, alpha) {
+    if (!im.naturalWidth) return;
+    const s = Math.max(cv.width / im.naturalWidth, cv.height / im.naturalHeight);
+    const w = im.naturalWidth * s, h = im.naturalHeight * s;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(im, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+  }
+
+  function frame() {
+    if (mode === 'gyro') target = yaw / perTurn;
+    else target = tiltBase == null ? yaw / perTurn : (tilt - tiltBase) / perTurn;
+    cur += (target - cur) * 0.25;
+    const p = ((cur % 1) + 1) % 1, f = p * N;
+    const a = Math.floor(f) % N, b = (a + 1) % N, t = f - Math.floor(f);
+    if (loaded === N) {
+      // 相鄰兩幀交叉淡入, 補足 35 幀之間的跳動
+      drawCover(frames[a], 1);
+      drawCover(frames[b], t);
+      ctx.globalAlpha = 1;
+    }
+    const ang = p * Math.PI * 2;
+    $('dot').setAttribute('cx', 28 + 22 * Math.sin(ang));
+    $('dot').setAttribute('cy', 28 - 22 * Math.cos(ang));
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // gyro: 積分繞手機縱軸 ( 螢幕的 y 軸 ) 的角速度 -> 不管手機怎麼拿, 左右轉都會轉動
+  // 規格上 rotationRate 的 alpha/beta/gamma = 繞 z/x/y, 但 iOS Safari 實作成 x/y/z, 所以 iOS 的 y 軸是 beta
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  const Y_AXIS = isIOS ? 'beta' : 'gamma';
+  const debug = new URLSearchParams(location.search).has('debug');
+  let lastT = null;
+  function onMotion(e) {
+    const r = e.rotationRate; if (!r || r[Y_AXIS] == null) return;
+    const now = performance.now();
+    const dt = lastT == null ? 0 : Math.min((now - lastT) / 1000, 0.1);
+    lastT = now;
+    const w = r[Y_AXIS];
+    if (Math.abs(w) > 0.5) yaw -= w * dt;
+    if (debug) {
+      $('msg').classList.remove('hide');
+      $('msg').textContent = `${isIOS ? 'iOS' : 'other'} · y=${Y_AXIS} · α ${r.alpha.toFixed(0)} β ${r.beta.toFixed(0)} γ ${r.gamma.toFixed(0)}`;
+    }
+  }
+  function onOrient(e) {
+    if (e.gamma == null) return;
+    tilt = e.gamma;
+    if (tiltBase == null) tiltBase = tilt;
+  }
+
+  async function enableSensors() {
+    try {
+      if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) {
+        const r = await DeviceMotionEvent.requestPermission();
+        if (r !== 'granted') throw new Error('motion denied');
+      }
+      if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+        await DeviceOrientationEvent.requestPermission();
+      }
+    } catch (err) {
+      $('msg').textContent = '無法取得陀螺儀權限，改用拖曳';
+      $('msg').classList.remove('hide');
+    }
+    addEventListener('devicemotion', onMotion);
+    addEventListener('deviceorientation', onOrient);
+  }
+
+  $('go').onclick = async () => {
+    await enableSensors();
+    $('start').classList.add('hide');
+    $('hud').classList.remove('hide');
+  };
+
+  // 拖曳 ( 桌機或補充 ): 拖過整個螢幕寬 = 一圈
+  let dragX = null;
+  cv.addEventListener('pointerdown', e => { dragX = e.clientX; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove', e => {
+    if (dragX == null) return;
+    const d = (e.clientX - dragX) / innerWidth * perTurn;
+    dragX = e.clientX;
+    if (mode === 'gyro') yaw -= d; else if (tiltBase != null) tiltBase += d; else yaw -= d;
+  });
+  addEventListener('pointerup', () => { dragX = null; });
+
+  document.querySelectorAll('#bar [data-mode]').forEach(btn => btn.onclick = () => {
+    mode = btn.dataset.mode;
+    document.querySelectorAll('#bar [data-mode]').forEach(b => b.classList.toggle('on', b === btn));
+    recenter();
+  });
+  function recenter() { yaw = 0; tiltBase = tilt || null; target = 0; cur = ((cur % 1) + 1) % 1; if (cur > .5) cur -= 1; }
+  $('recenter').onclick = recenter;
+  $('sensIn').oninput = e => { perTurn = +e.target.value; $('sensOut').textContent = perTurn + '°/圈'; };
+})();
+</script>
+</body>
+</html>
